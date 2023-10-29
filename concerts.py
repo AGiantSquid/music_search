@@ -26,11 +26,12 @@ KALX_G_DRIVE_URL = 'https://drive.google.com/drive/folders/1UkAPNVPC-dTMboF4b8r4
 
 def open_upcoming_acts():
     """Get the upcoming acts from the KALX sheet, and open them in Chrome."""
+    today = datetime.today()
     chrome_browser = get_chrome_browser()
-    schedule_pdf_file_name = get_schedule_pdf_file_name()
+    schedule_pdf_file_name = get_schedule_pdf_file_name(today)
     upcoming_shows_data = get_file_data(chrome_browser, schedule_pdf_file_name)
     parsed_show_data = extract_show_information(upcoming_shows_data)
-    display_data_to_user(parsed_show_data)
+    display_data_to_user(parsed_show_data, today)
 
 
 def get_chrome_browser() -> webbrowser.Chrome:
@@ -51,7 +52,7 @@ def get_chrome_browser() -> webbrowser.Chrome:
 
 def get_schedule_pdf_file_name(today: Optional[datetime]=None) -> str:
     """Get the name of the weekly pdf file, based on "today."
-    
+
     >>> today = datetime(2023, 9, 2)
     >>> get_schedule_pdf_file_name(today)
     '8.28.23-9.3.23.pdf'
@@ -62,23 +63,23 @@ def get_schedule_pdf_file_name(today: Optional[datetime]=None) -> str:
 
     if not today:
         today = datetime.today()
-    
+
     # Calculate the start and end of the week (assuming weeks start on Monday)
     start_of_week = today - timedelta(days=today.weekday())
     end_of_week = start_of_week + timedelta(days=6)
-    
+
     # Format the dates ensuring no leading zeros for the month
     def custom_format(date):
         return f"{date.month}.{date.day}.{date.strftime('%y')}"
-    
+
     start_string = custom_format(start_of_week)
     end_string = custom_format(end_of_week)
-    
+
     return f"{start_string}-{end_string}.pdf"
 
 
 def get_file_data(
-        chrome_browser: webbrowser.Chrome, 
+        chrome_browser: webbrowser.Chrome,
         schedule_pdf_file_name: str,
     ) -> str:
     """Get data from pdf file as a line separated string."""
@@ -88,28 +89,28 @@ def get_file_data(
 
     with open(output_path, 'rb') as f:
         pdf = PdfReader(f)
-        
+
         lines = chain.from_iterable(
             (page.extract_text() or '').split('\n')
             for page in pdf.pages
         )
-        
+
         return '\n'.join(line.strip() for line in lines)
 
 
 def download_file_if_necessary(
-        chrome_browser: webbrowser.Chrome, 
+        chrome_browser: webbrowser.Chrome,
         output_path: Path,
     ):
     """Check if the file is already downloaded. If not, open a browser to download.
-    
+
     Google Drive doesn't let you download programatically with only the filename,
     hence the manual browser workflow.
     """
 
     if not output_path.exists():
         logger.info(f'Unable to find concerts file {output_path.name}, please download now.')
-        
+
         chrome_browser.open_new(KALX_G_DRIVE_URL)
 
         click.confirm(f'Hit enter when you have downloaded the file')
@@ -137,7 +138,7 @@ ShowData = TypedDict('ShowData', {
 
 def extract_show_information(upcoming_shows_data: str) -> ShowData:
     """Accept show data as string.
-    
+
     upcoming_shows_data looks like the following:
     KALX Entertainment Calendar
     3:30 pm/6:30 pm
@@ -161,8 +162,8 @@ def extract_show_information(upcoming_shows_data: str) -> ShowData:
     """
 
     parsed_week_data = re.findall(
-        r'Day: (.*?)(East Bay.*?\n)(San Francisco.*?)\nSee events', 
-        upcoming_shows_data, 
+        r'Day: (.*?)(East Bay.*?\n)(San Francisco.*?)\nSee events',
+        upcoming_shows_data,
         flags=re.DOTALL,
     )
 
@@ -190,7 +191,7 @@ def extract_show_information(upcoming_shows_data: str) -> ShowData:
                 venue = show[0].strip()
                 bands = [
                     band.strip()
-                    for band in show[1].split(',') 
+                    for band in show[1].split(',')
                     if 'and more' not in band.lower()
                 ]
                 day_data['regions'][region_name][venue] = bands
@@ -198,12 +199,18 @@ def extract_show_information(upcoming_shows_data: str) -> ShowData:
         week_data.append(day_data)
 
     return week_data
-        
 
-def display_data_to_user(show_data: ShowData):
+
+def display_data_to_user(show_data: ShowData, today: Optional[datetime]=None):
     """Open YouTube page for each act at each venue if the user wants to see it."""
     for concerts in show_data:
         day = concerts['day']
+
+        show_date = pdf_date_format_to_date(day)
+
+        if show_date.date() < today.date():
+            continue
+
         regions = concerts['regions']
 
         open_videos = click.confirm(
@@ -238,6 +245,31 @@ def display_data_to_user(show_data: ShowData):
                     time.sleep(.1)
             print()
     exit()
+
+
+def pdf_date_format_to_date(pdf_date: str) -> datetime:
+    """Accept pdf format of date and convert to datetime.
+
+    >>> pdf_date_format_to_date('Monday Date: 23-Oct')
+    datetime
+    """
+    components = re.findall(r"(\d+|[A-Za-z]+)", pdf_date.split(":")[1].strip())
+
+    # If the first component is a digit, it's in the "23-Oct" format
+    if components[0].isdigit():
+        day, month = components
+    else:
+        month, day = components
+
+    # Create a consistent string format
+    formatted_date_str = f"{day}-{month}"
+
+    # Assume the current year
+    current_year = datetime.now().year
+    date_str_with_year = f"{formatted_date_str}-{current_year}"
+
+    # Convert to datetime object
+    return datetime.strptime(date_str_with_year, "%d-%b-%Y")
 
 
 if __name__ == '__main__':
